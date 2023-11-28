@@ -164,8 +164,7 @@ class FastL2LiR(object):
                 )
             elif saveMemory or (sample_norm is not None):
                 print("Run saveMemory mode.")
-                W, b, S = self.__sub_fit2(X, Y[0:, chunk], alpha=alpha, n_feat=n_feat, sample_norm = sample_norm, use_all_features=no_feature_selection, dtype=dtype)
-                s_list.append(S)
+                W, b, S = self.__sub_fit2(X, Y, alpha=alpha, n_feat=n_feat, sample_norm = sample_norm, use_all_features=no_feature_selection, dtype=dtype)
             else:
                 W, b = self.__sub_fit(
                     X, Y, alpha=alpha, n_feat=n_feat,
