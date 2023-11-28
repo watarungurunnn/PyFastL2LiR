@@ -309,14 +309,14 @@ class FastL2LiR(object):
             Wb = np.linalg.solve(np.matmul(X.T, X) + alpha * np.eye(X.shape[1], dtype=dtype), np.matmul(X.T, Y))
             W = Wb[0:-1, :]
             b = Wb[-1, :][np.newaxis, :]  # Returning b as a 2D array
-            S = np.ones((Y.shape[1], X.shape[1] - 1), dtype=np.bool) # bias分の1列をマイナスしておく
+            S = np.ones((Y.shape[1], X.shape[1] - 1), dtype=bool) # bias分の1列をマイナスしておく
             #　W は転置不要
             S = S.T # 転置し， <voxSize x featSize>
         else:
             # With feature selection
             W = np.zeros((Y.shape[1], X.shape[1]), dtype=dtype)
             b = np.zeros((1, Y.shape[1]), dtype=dtype)
-            S = np.zeros((Y.shape[1], X.shape[1]), dtype=np.bool)
+            S = np.zeros((Y.shape[1], X.shape[1]), dtype=bool)
             I = np.nonzero(np.var(X, axis=0) < 0.00000001) # ここで非ゼロのindex値を返している (not bool)
             C = corrmat(X, Y, 'col')
             C[I, :] = 0.0
@@ -354,7 +354,7 @@ class FastL2LiR(object):
                             W[index_outputDim, I[index_selectedDim]] = Wb[index_selectedDim]
                         b[0, index_outputDim] = Wb[-1]
                     W = W.T
-                    S = np.asarray(S.T, dtype=np.bool) # 転置してbool型に直しておく
+                    S = np.asarray(S.T, dtype=bool) # 転置してbool型に直しておく
             else:
                     for index_outputDim in tqdm(range(Y.shape[1])):
                         C0 = abs(C[index_outputDim,:])
@@ -385,7 +385,7 @@ class FastL2LiR(object):
                             W[index_outputDim, I[index_selectedDim]] = Wb[index_selectedDim]
                         b[0, index_outputDim] = Wb[-1]
                     W = W.T
-                    S = np.asarray(S.T, dtype=np.bool) # 転置してbool型に直しておく
+                    S = np.asarray(S.T, dtype=bool) # 転置してbool型に直しておく
 
         return W, b, S
     def __sub_fit_save_select_feat(
@@ -403,7 +403,7 @@ class FastL2LiR(object):
         # Prepare the matixes to save.
         W = np.zeros((Y.shape[1], X.shape[1]), dtype=dtype)    # feature size x voxel size
         b = np.zeros((1, Y.shape[1]), dtype=dtype)             # feautre size
-        S = np.zeros((Y.shape[1], X.shape[1]), dtype=np.bool)  # feature size x voxel size
+        S = np.zeros((Y.shape[1], X.shape[1]), dtype=bool)  # feature size x voxel size
 
         if not python_version >= 3.5:
             raise RuntimeError('Python version requires 3.5 or more.')
@@ -442,7 +442,7 @@ class FastL2LiR(object):
                     W[index_outputDim, I[index_selectedDim]] = Wb[index_selectedDim]
                 b[0, index_outputDim] = Wb[-1]
             W = W.T
-            S = np.asarray(S.T, dtype=np.bool)  # Transpose and convert to bool type
+            S = np.asarray(S.T, dtype=bool)  # Transpose and convert to bool type
 
         return W, b, S
 
