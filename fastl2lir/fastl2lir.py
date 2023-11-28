@@ -48,7 +48,7 @@ class FastL2LiR(object):
     def S(self, S):
         self.__S = S
 
-    def fit(self, X, Y, alpha=1.0, n_feat=0, save_select_feat=False, spatial_norm=None, select_sample=None, chunk_size=0, cache_dir='./cache', dtype=np.float64):
+    def fit(self, X, Y, alpha=1.0, n_feat=0, save_select_feat=False, spatial_norm=None, select_sample=None, chunk_size=0, cache_dir='./cache', dtype=np.float64, saveMemory=False):
         '''Fit the L2-regularized linear model with the given data.
 
         Parameters
@@ -155,6 +155,11 @@ class FastL2LiR(object):
                     select_sample=select_sample,
                     dtype=dtype
                 )
+                assert !(saveMemory) and (sample_norm is None), f"Save memory and sample norm can't be conducted together now." 
+            elif saveMemory or (sample_norm is not None):
+                print("Run saveMemory mode.")
+                W, b, S = self.__sub_fit2(X, Y[0:, chunk], alpha=alpha, n_feat=n_feat, sample_norm = sample_norm, use_all_features=no_feature_selection, dtype=dtype)
+                s_list.append(S)
             else:
                 W, b = self.__sub_fit(
                     X, Y, alpha=alpha, n_feat=n_feat,
@@ -164,7 +169,7 @@ class FastL2LiR(object):
 
         self.__W = W
         self.__b = b
-        if save_select_feat:
+        if save_select_feat or saveMemory or (sample_norm is not None):
             self.__S = S
 
         if reshape_y:
@@ -287,7 +292,97 @@ class FastL2LiR(object):
                 W = W.T
 
         return W, b
+        
+    def __sub_fit2(self, X, Y, alpha=0, n_feat=0, sample_norm = None, use_all_features=True, dtype=np.float64):
+        """
+        voxel selectionごとにW行列を作るタイプ
+        originated from: https://github.com/KamitaniLab/PyFastL2LiR_mtanaka/blob/spatial_norm/fastl2lir/fastl2lir.py#L258
+        """
+        if use_all_features:
+            # Without feature selection                                      
+            X = np.hstack((X, np.ones((X.shape[0], 1), dtype=dtype)))
+            Wb = np.linalg.solve(np.matmul(X.T, X) + alpha * np.eye(X.shape[1], dtype=dtype), np.matmul(X.T, Y))
+            W = Wb[0:-1, :]
+            b = Wb[-1, :][np.newaxis, :]  # Returning b as a 2D array        
+            S = np.ones((Y.shape[1], X.shape[1] - 1), dtype=np.bool) # bias分の1列をマイナスしておく
+            #　W は転置不要
+            S = S.T # 転置し， <voxSize x featSize>
+        else:
+            # With feature selection
+            W = np.zeros((Y.shape[1], X.shape[1]), dtype=dtype)
+            b = np.zeros((1, Y.shape[1]), dtype=dtype)
+            S = np.zeros((Y.shape[1], X.shape[1]), dtype=np.bool)
+            I = np.nonzero(np.var(X, axis=0) < 0.00000001) # ここで非ゼロのindex値を返している (not bool)                                      
+            C = corrmat(X, Y, 'col')
+            C[I, :] = 0.0
+            C = C.T
 
+            # TODO: refactoring     
+            if python_version >= 3.5:
+                with threadpool_limits(limits=1, user_api='blas'):
+                    for index_outputDim in tqdm(range(Y.shape[1])):                    
+                        C0 = abs(C[index_outputDim,:])
+                        I = np.argsort(C0)
+                        I = I[::-1]
+                        I = I[0:n_feat]	
+                        newX = X[:, I]# ここでvoxel selection完了 (sample_num x voxel_num)
+                        S[index_outputDim, I] = True
+                        if sample_norm == "norm1": # L1norm
+                            newX = newX / np.sum(np.abs(newX), axis=1).reshape(newX.shape[0], 1) # 行 sample ごとにL1normで割る
+                        elif sample_norm == "norm2": # L2norm
+                            newX = newX / np.sqrt(np.sum(np.square(newX), axis=1)).reshape(newX.shape[0], 1)# 行 sample ごとにL2normで割る
+                        elif sample_norm == "std1": # STD=1で正規化
+                            newX = (newX - np.mean(newX, axis=1, keepdims=True)) / np.std(newX, axis=1, ddof=1, keepdims=True) + np.mean(newX, axis=1, keepdims=True)
+                        elif sample_norm == "std1mean0": # STD=1で正規化し，平均もさっぴく
+                            newX = (newX - np.mean(newX, axis=1, keepdims=True)) / np.std(newX, axis=1, ddof=1, keepdims=True)
+                        elif sample_norm == "norm1mean0": # 平均補正のL1norm
+                            newX = newX - np.mean(newX, axis=1, keepdims=True)
+                            newX = newX / np.sum(np.abs(newX), axis=1).reshape(newX.shape[0], 1) # 行 sample ごとにL1normで割る
+                        elif sample_norm == "norm2mean0": # 平均補正のL2norm
+                            newX = newX - np.mean(newX, axis=1, keepdims=True)
+                            newX = newX / np.sqrt(np.sum(np.square(newX), axis=1)).reshape(newX.shape[0], 1)# 行 sample ごとにL2normで割る
+                        newX = np.hstack((newX, np.ones((newX.shape[0], 1), dtype=dtype))) # 最左列にoneの列を追加                                   
+                        W0 = np.matmul(newX.T, newX) + alpha * np.eye(newX.shape[1], dtype=dtype)
+                        W1 = np.matmul(Y.T[index_outputDim], newX).reshape(-1,1)
+                        Wb = np.linalg.solve(W0, W1)
+                        for index_selectedDim in range(n_feat):
+                            W[index_outputDim, I[index_selectedDim]] = Wb[index_selectedDim]
+                        b[0, index_outputDim] = Wb[-1]                    
+                    W = W.T
+                    S = np.asarray(S.T, dtype=np.bool) # 転置してbool型に直しておく
+            else:
+                    for index_outputDim in tqdm(range(Y.shape[1])):                    
+                        C0 = abs(C[index_outputDim,:])
+                        I = np.argsort(C0)
+                        I = I[::-1]
+                        I = I[0:n_feat]	
+                        newX = X[:, I]
+                        S[index_outputDim, I] = True
+                        if sample_norm == "norm1": # L1norm
+                            newX = newX / np.sum(np.abs(newX), axis=1).reshape(newX.shape[0], 1) # 行 sample ごとにL1normで割る
+                        elif sample_norm == "norm2": # L2norm
+                            newX = newX / np.sqrt(np.sum(np.square(newX), axis=1)).reshape(newX.shape[0], 1)# 行 sample ごとにL2normで割る
+                        elif sample_norm == "std1": # STD=1で正規化
+                            newX = (newX - np.mean(newX, axis=1, keepdims=True)) / np.std(newX, axis=1, ddof=1, keepdims=True) + np.mean(newX, axis=1, keepdims=True)
+                        elif sample_norm == "std1mean0": # STD=1で正規化し，平均もさっぴく
+                            newX = (newX - np.mean(newX, axis=1, keepdims=True)) / np.std(newX, axis=1, ddof=1, keepdims=True)
+                        elif sample_norm == "norm1mean0": # 平均補正のL1norm
+                            newX = newX - np.mean(newX, axis=1, keepdims=True)
+                            newX = newX / np.sum(np.abs(newX), axis=1).reshape(newX.shape[0], 1) # 行 sample ごとにL1normで割る
+                        elif sample_norm == "norm2mean0": # 平均補正のL2norm
+                            newX = newX - np.mean(newX, axis=1, keepdims=True)
+                            newX = newX / np.sqrt(np.sum(np.square(newX), axis=1)).reshape(newX.shape[0], 1)# 行 sample ごとにL2normで割る
+                        newX = np.hstack((newX, np.ones((newX.shape[0], 1), dtype=dtype))) # 最左列にoneの列を追加                                   
+                        W0 = np.matmul(newX.T, newX) + alpha * np.eye(newX.shape[1], dtype=dtype)
+                        W1 = np.matmul(Y.T[index_outputDim], newX).reshape(-1,1)
+                        Wb = np.linalg.solve(W0, W1)
+                        for index_selectedDim in range(n_feat):
+                            W[index_outputDim, I[index_selectedDim]] = Wb[index_selectedDim]
+                        b[0, index_outputDim] = Wb[-1]                    
+                    W = W.T
+                    S = np.asarray(S.T, dtype=np.bool) # 転置してbool型に直しておく
+
+        return W, b, S
     def __sub_fit_save_select_feat(
             self, X, Y, alpha=0, n_feat=0,
             spatial_norm=None,
